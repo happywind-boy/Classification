@@ -28,8 +28,8 @@ class BasicModule(nn.Module):
 
         return
 
-    def forward(self, x):
-        return self.model(x)
+    def forward(self, x, y):
+        return self.model(x, y)
 
 
 class SELayer(nn.Module):
@@ -57,9 +57,8 @@ def conv3x3(in_planes, out_planes, stride=1):
 class SEBasicBlock(nn.Module):
     expansion = 1
 
-    def __init__(self, inplanes, planes, stride=1, downsample=None, groups=1,
-                 base_width=64, dilation=1, norm_layer=None,
-                 *, reduction=16):
+    def __init__(self, inplanes, planes, stride=1, downsample=None, groups=1, base_width=64, dilation=1,
+                 norm_layer=None, *, reduction=16):
         super(SEBasicBlock, self).__init__()
         self.conv1 = conv3x3(inplanes, planes, stride)
         self.bn1 = nn.BatchNorm3d(planes)
@@ -92,9 +91,8 @@ class SEBasicBlock(nn.Module):
 class SEBottleneck(nn.Module):
     expansion = 4
 
-    def __init__(self, inplanes, planes, stride=1, downsample=None, groups=1,
-                 base_width=64, dilation=1, norm_layer=None,
-                 *, reduction=16):
+    def __init__(self, inplanes, planes, stride=1, downsample=None, groups=1, base_width=64, dilation=1,
+                 norm_layer=None, *, reduction=16):
         super(SEBottleneck, self).__init__()
         self.conv1 = nn.Conv3d(inplanes, planes, kernel_size=1, bias=False)
         self.bn1 = nn.BatchNorm3d(planes)
@@ -223,9 +221,12 @@ class CifarSEBasicBlock(nn.Module):
 
 
 class CifarSEResNet(BasicModule):
-    def __init__(self, block, n_size, in_channel=3, num_classes=10, reduction=16):
+    def __init__(self, block, n_size, act='sigmoid', in_channel=3, num_classes=10, reduction=16):
         super(CifarSEResNet, self).__init__()
+        self.fc1 = None
+        self.fc2 = None
         self.inplane = 16
+        self.num_classes = num_classes
         self.in_channel = in_channel
         self.conv1 = nn.Conv3d(
             self.in_channel, self.inplane, kernel_size=3, stride=1, padding=1, bias=False)
@@ -239,6 +240,7 @@ class CifarSEResNet(BasicModule):
             block, 64, blocks=n_size, stride=2, reduction=reduction)
         self.avgpool = nn.AdaptiveAvgPool3d(1)
         self.fc = nn.Linear(64, num_classes)
+        self.act = self.act[act]
         self.initialize()
 
     def initialize(self):
@@ -258,7 +260,10 @@ class CifarSEResNet(BasicModule):
 
         return nn.Sequential(*layers)
 
-    def forward(self, x):
+    def forward(self, x, y):
+        num = y.size()[-1]
+        self.fc1 = nn.Linear(num + 64, 8)
+        self.fc2 = nn.Linear(8, self.num_classes)
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)
@@ -269,19 +274,26 @@ class CifarSEResNet(BasicModule):
 
         x = self.avgpool(x)
         x = x.view(x.size(0), -1)
-        x = self.fc(x)
+        x = torch.cat((x, y), dim=-1)
+        x = self.fc1(x)
+        x = self.fc2(x)
+        x = self.act(x)
 
         return x
 
 
 class CifarSEPreActResNet(CifarSEResNet):
-    def __init__(self, block, n_size, num_classes=10, reduction=16):
+    def __init__(self, block, n_size, act='sigmoid', in_channel=3, num_classes=10, reduction=16):
         super(CifarSEPreActResNet, self).__init__(
-            block, n_size, num_classes, reduction)
+            block, n_size, act, in_channel, num_classes, reduction)
         self.bn1 = nn.BatchNorm3d(self.inplane)
+        self.act = {'softmax': nn.Softmax(dim=1), 'sigmoid': nn.Sigmoid()}[act]
         self.initialize()
 
-    def forward(self, x):
+    def forward(self, x, y):
+        num = y.size()[-1]
+        self.fc1 = nn.Linear(num + 64, 8)
+        self.fc2 = nn.Linear(8, self.num_classes)
         x = self.conv1(x)
         x = self.layer1(x)
         x = self.layer2(x)
@@ -292,9 +304,12 @@ class CifarSEPreActResNet(CifarSEResNet):
 
         x = self.avgpool(x)
         x = x.view(x.size(0), -1)
-        x = self.fc(x)
-    
-    return x
+        x = torch.cat((x, y), dim=-1)
+        x = self.fc1(x)
+        x = self.fc2(x)
+        x = self.act(x)
+
+        return x
 
 
 def se_resnet20(**kwargs):
@@ -343,3 +358,4 @@ def se_preactresnet56(**kwargs):
     """
     model = CifarSEPreActResNet(CifarSEBasicBlock, 9, **kwargs)
     return model
+
